@@ -1,7 +1,7 @@
 var tmp = require('tmp');
 var assign = require('object-assign');
 var fs = require('fs');
-var crossExecFile = require('cross-exec-file');
+var childProcess = require('child_process');
 
 /**
  * @param {string} url url (e.g. http://google.com)
@@ -18,7 +18,7 @@ var crossExecFile = require('cross-exec-file');
 module.exports = function electronHAR(url, options, callback) {
   typeof options === 'function' && (callback = options, options = {});
 
-  // using temporary file to prevent messages like "Xlib:  extension ...",
+  // Using temporary file to prevent messages like "Xlib:  extension ...",
   // "libGL error ..." from cluttering stdout in a headless env (as in Xvfb).
   tmp.file(function (err, path, fd, cleanup) {
 
@@ -26,19 +26,8 @@ module.exports = function electronHAR(url, options, callback) {
       return callback(err);
     }
 
-    callback = (function (callback) {
-      return function () {
-        process.nextTick(Function.prototype.bind.apply(callback,
-          [null].concat(Array.prototype.slice.call(arguments))
-        ));
 
-        cleanup();
-      };
-    })(callback);
-
-    console.log(options);
-
-    // map options into config object
+    // Map options into config object.
     var config = assign({}, options, {
       output: path,
       user: options.user === Object(options.user) ?
@@ -49,40 +38,51 @@ module.exports = function electronHAR(url, options, callback) {
       landscape: options['landscape'] ? options['landscape'] : null
     });
 
-    // initialize electron-har process
-    crossExecFile(
-      __dirname + '/../bin/electron-har',
-      [url].concat(
-        Object
-          .keys(config)
-          .reduce(function (n, flag) {
-            var argvs = config[flag];
-            argvs !== null && argvs.push(flag.length === 1 ? '-' + flag : '--' + flag, argvs);
-            return argvs;
-          }, [])
-      ),
-      function (err, stdout, stderr) {
-        if (err) {
-          if (stderr) {
-            err.message = stderr.trim();
-          }
 
+    // The arguments object to pass to the spawned process.
+    var args = [url].concat(
+      Object
+        .keys(config)
+        .reduce(function (n, flag) {
+          argv = ''
+          if (config[flag] !== undefined && config[flag] !== null ){
+            argv = flag.length === 1 ? '-' + flag : '--' + flag;
+            argv += ' ' + config[flag];
+          }
+          return argv;
+        }, [])
+    )
+
+    // The callback for the spawned process.
+    var processCallback = function (err, stdout, stderr) {
+      if (err) {
+        if (stderr) {
+          err.message = stderr.trim();
+        }
+
+        return callback(err);
+      }
+
+      fs.readFile(path, 'utf8', function (err, data) {
+        if (err) {
           return callback(err);
         }
 
-        fs.readFile(path, 'utf8', function (err, data) {
-          if (err) {
-            return callback(err);
-          }
-
-          try {
-            callback(null, JSON.parse(data));
-
-          } catch (e) {
-            return callback(e);
-
-          }
-        });
+        try {
+          callback(null, JSON.parse(result));
+        } catch (e) {
+          return callback(e);
+        }
       });
+    }
+
+    // Initialise the electron-har process using spawn
+    // as cross-exec-file (exec-file) results in stdout maxBuffer exceeded errors.
+    var command = childProcess.spawn(__dirname + '/../bin/electron-har', args)
+    var result = ''
+    command.stdout.on('data', function(data){
+      result += data.toString();
+    })
+    command.on('close', processCallback)
   });
 };
