@@ -44,7 +44,7 @@ var yargs = require('yargs')
 var argv = process.env.ELECTRON_HAR_AS_NPM_MODULE ?
   yargs.argv : yargs.parse(process.argv.slice(1));
 
-var url = argv._[0];
+var targetUrl = argv._[0];
 
 // capture CLI argument values
 if (argv.u) {
@@ -63,10 +63,10 @@ var forceLandscape  = argv.landscape;
 // validate required arguments
 var argvValidationError;
 
-if (!url) {
+if (!targetUrl) {
   argvValidationError = 'URL must be specified';
 
-} else if (!/^(http|https):\/\//.test(url)) {
+} else if (!/^(http|https):\/\//.test(targetUrl)) {
   argvValidationError = 'URL must contain the protocol prefix, e.g. http://';
 
 }
@@ -82,8 +82,9 @@ if (argvValidationError) {
 var electron        = require('electron');
 var app             = require('app');
 var BrowserWindow   = require('browser-window');
-var stringify   = require('json-stable-stringify');
-var fs          = require('fs');
+var stringify       = require('json-stable-stringify');
+var fs              = require('fs');
+var url             = require('url');
 
 // set timeout delay for HAR file response
 if (timeout > 0) {
@@ -206,8 +207,14 @@ app.on('ready', function () {
   // fired regardless of the outcome (success or not)
   bw.webContents.on('did-finish-load', notifyDevToolsExtensionOfLoad);
 
-  bw.webContents.on('did-fail-load', function (e, errorCode, errorDescription, url) {
-    if (url !== 'chrome://ensure-electron-resolution/' && url !== 'https://did-finish-load/') {
+  // if a request failed, the har file probably failed
+  bw.webContents.on('did-fail-load', function (e, errorCode, errorDescription, requestUrl) {
+
+    if (requestUrl !== 'chrome://ensure-electron-resolution/'
+      && requestUrl !== 'https://did-finish-load/'
+      && url.parse(requestUrl).host === url.parse(targetUrl).host
+    ) {
+
       bw.webContents.removeListener('did-finish-load', notifyDevToolsExtensionOfLoad);
       bw.webContents.executeJavaScript('require("electron").ipcRenderer.send("har-generation-failed", ' +
         JSON.stringify({errorCode: errorCode, errorDescription: errorDescription}) + ')');
@@ -217,7 +224,7 @@ app.on('ready', function () {
   electron.ipcMain.on('devtools-loaded', function (event) {
     setTimeout(function () {
       // bw.loadURL proved to be unreliable on Debian 8 (half of the time it has no effect)
-      bw.webContents.executeJavaScript('location = ' + JSON.stringify(url));
+      bw.webContents.executeJavaScript('location = ' + JSON.stringify(targetUrl));
     }, 0);
   });
 
